@@ -1,3 +1,6 @@
 [submodule "external/EQNet"]
 	path = external/EQNet
 	url = https://github.com/AI4EPS/EQNet.git
+[submodule "external/stomp_client"]
+	path = external/stomp_client
+	url = git@scsngit.gps.caltech.edu:eew/stomp_client.git
