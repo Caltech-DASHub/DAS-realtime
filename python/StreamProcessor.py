@@ -104,6 +104,10 @@ def doWork(strmRdr, args, waveRing=None, pickRing=None, loop=None, minimumPhaseN
 
             ii += strmRdr.getNumTimeSamples(packet)
 
+            t_each_print = 1.0 # seconds
+            if ii % int(t_each_print*fs) == 0:
+                print(f'Packet first and last timestamp and shape of ringbuffer: {ringbuff.getTimeStamps()[0]}, {ringbuff.getTimeStamps()[-1]}, {ringbuff.getData().shape}', flush=True)
+                
             # Do some processing every workInterval
             if workInterval > 0.0  and ii % int(workInterval*fs) == 0 and ii > 0:
                 # print(f'Packet first and last timestamp and shape of ringbuffer: {ringbuff.getTimeStamps()[0]}, {ringbuff.getTimeStamps()[-1]}, {ringbuff.getData().shape}', flush=True)
