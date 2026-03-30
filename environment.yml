@@ -155,6 +155,7 @@ dependencies:
   - six=1.16.0=pyhd3eb1b0_1
   - sqlite=3.45.3=h5eee18b_0
   - stack_data=0.6.3=pyhd8ed1ab_1
+  - stomp.py=8.2.0
   - sysroot_linux-64=2.17=h57e8cba_10
   - tbb=2020.3=hfd86e86_0
   - tenacity=9.0.0=py39h06a4308_0
