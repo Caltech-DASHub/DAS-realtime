@@ -44,7 +44,7 @@ def doWork(strmRdr, args, waveRing=None, pickRing=None, loop=None, minimumPhaseN
         pickingChannel = np.arange(nch)
         if args.pickingChannel is not None:
             pickingChannel_df = pd.read_csv(args.pickingChannel)
-            pickingChannel = pickingChannel_df['index_good_channel_in_5k_realtime'].values.astype(int)
+            pickingChannel = pickingChannel_df['Channel'].values.astype(int)
             print(f"Picking will be performed on {pickingChannel.shape[0]} channels: {pickingChannel}", flush=True)
             
         # Picking output folder
