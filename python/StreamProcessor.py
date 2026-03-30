@@ -4,6 +4,7 @@
 import socket, zmq
 import argparse
 import numpy as np
+import pandas as pd
 from DASPacket_Mod import *
 from DAS_RealTimeMod import RingBuffer, real_time_picking_async, start_picking_thread, merge_stream_picks, time_format
 import time
@@ -42,7 +43,10 @@ def doWork(strmRdr, args, waveRing=None, pickRing=None, loop=None, minimumPhaseN
         nch = strmRdr.getNumChannel(packet)
         pickingChannel = np.arange(nch)
         if args.pickingChannel is not None:
-            pickingChannel = np.loadtxt(args.pickingChannel, delimiter=',', dtype=int)
+            pickingChannel_df = pd.read_csv(args.pickingChannel)
+            pickingChannel = pickingChannel_df['index_good_channel_in_5k_realtime'].values.astype(int)
+            print(f"Picking will be performed on {pickingChannel.shape[0]} channels: {pickingChannel}", flush=True)
+            
         # Picking output folder
         pickOutput = args.pickOutput
         startPicking = time.time()
