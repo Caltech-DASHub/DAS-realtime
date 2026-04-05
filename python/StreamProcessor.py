@@ -14,8 +14,6 @@ from obspy.core.inventory import inventory
 import asyncio
 import PyEW
 
-time_format = "%Y-%m-%dT%H%M%SZ"
-
 def doWork(strmRdr, args, waveRing=None, pickRing=None, loop=None, minimumPhaseNetTime=30.0):
     try:
 
