@@ -11,11 +11,21 @@ conda env create -f environment.yml
 
 git submodule update --init --recursive external/EQNet
 
+git submodule update --init --recursive external/stomp_client
+
 cd external/EQNet/
 
 pip install -r requirements.txt
 
 pip install obspy fastapi
+
+cd ../..
+
+If you want stomp_client to track the latest commit on its configured branch, run:
+
+git submodule sync
+
+git submodule update --remote external/stomp_client
 
 ```
 
