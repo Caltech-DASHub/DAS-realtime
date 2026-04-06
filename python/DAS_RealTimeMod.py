@@ -549,7 +549,10 @@ def convert_peak_strain_rate_to_pga(peak_strain_rate, peak_indices, time_stamps,
     conversion_factors = np.asarray(conversion_factors, dtype=float)
     if peak_strain_rate.shape != conversion_factors.shape:
         raise ValueError('peak_strain_rate and conversion_factors must have the same shape')
-
+    # unit of peak_strain_rate is 1/s
+    # unit of conversion_factors is m/s
+    # unit of peak_strain_rate * conversion_factors is m/s^2
+    # FinDer input expects PGA in cm/s^2, so we multiply by 100 to convert from m/s^2 to cm/s^2
     pga_values = peak_strain_rate * conversion_factors * 100.0
     peak_times = np.asarray(time_stamps)[peak_indices]
     return pga_values, peak_times
