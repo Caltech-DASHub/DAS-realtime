@@ -52,6 +52,10 @@ class ASN_StreamReader(StreamReader):
     """Streamer Reader for ASN data"""
     def __init__(self, socket):
         self.socket = socket
+        self.enable_data_delay_diag = False
+        self.last_packet_header_time = None
+        self.last_packet_receive_time = None
+        self.last_packet_delay_seconds = None
         self.header = None
         self.rois = []
         self.times = []
@@ -98,6 +102,12 @@ class ASN_StreamReader(StreamReader):
         # Updating internal sample count
         self.SampleCount += self.data.shape[0]
         self.times = [time_utc + timedelta(seconds=(it*dt)) for it in np.arange(self.data.shape[0])]
+        if self.enable_data_delay_diag:
+            self.last_packet_header_time = time_utc
+            self.last_packet_receive_time = datetime.now(timezone.utc)
+            self.last_packet_delay_seconds = (
+                self.last_packet_receive_time - self.last_packet_header_time
+            ).total_seconds()
         return packet
         
     def getPacketTimestamp(self, header):
@@ -138,6 +148,10 @@ class OptaSenseStreamReader(StreamReader):
     def __init__(self, socket):
         self.buffer = b''
         self.socket = socket
+        self.enable_data_delay_diag = False
+        self.last_packet_header_time = None
+        self.last_packet_receive_time = None
+        self.last_packet_delay_seconds = None
 
     def getPacketHeaderSize(self, packet):
         return int(self.from_bytes(packet[8:9]))
@@ -184,6 +198,12 @@ class OptaSenseStreamReader(StreamReader):
         
         packet = self.buffer[:PACKET_LEN]
         self.buffer = self.buffer[PACKET_LEN:]
+        if self.enable_data_delay_diag:
+            self.last_packet_header_time = self.getPacketTimestamp(packet)
+            self.last_packet_receive_time = datetime.now(timezone.utc)
+            self.last_packet_delay_seconds = (
+                self.last_packet_receive_time - self.last_packet_header_time
+            ).total_seconds()
         return packet
     
     def from_bytes(self, data, big_endian=False):
