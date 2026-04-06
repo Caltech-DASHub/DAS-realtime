@@ -13,6 +13,7 @@ import threading
 import dateutil.parser
 from datetime import datetime, timezone
 import atexit
+from dataclasses import dataclass
 import pandas as pd
 # DAS utilities related to picking process
 import DAS_ML
@@ -62,28 +63,90 @@ class RingBuffer:
         return np.array(self.timeStamps)
     
     def setObspyTraceHeader(self, inventory=None):
-        """Method to set channel header from inventory"""
+        """Method to set channel header from inventory.
+
+        The XML station labels carry a reduced-subset channel index in the form
+        `<label>/<reduced_subset_index>`. Only the reduced-subset index is used
+        here: it is a positional index into `self.good_ch`, not a raw DAS
+        channel id.
+        """
         if inventory is None:
             self.stats = None
             self.channels_info = None
+            self.chIds = None
+            self.rawChIds = None
+            self.statNames = None
+            self.latitudes = None
+            self.longitudes = None
             return
+
         station_dict = inventory.get_contents()
-        self.channels_info = station_dict['channels']
-        network_codes = [stat.split(".")[0] for stat in self.channels_info]
-        station_codes = [stat.split(".")[1] for stat in self.channels_info]
-        channel_codes = [stat.split(".")[3] for stat in self.channels_info]
-        self.chIds = [int(stat.split(" ")[-1][:-1].split("/")[1]) for stat in station_dict['stations']]
-        # Creating stats for traces
+        xml_channels_info = station_dict['channels']
+        network_codes = [stat.split(".")[0] for stat in xml_channels_info]
+        station_codes = [stat.split(".")[1] for stat in xml_channels_info]
+        channel_codes = [stat.split(".")[3] for stat in xml_channels_info]
+        xml_subset_idx = [int(stat.split(" ")[-1][:-1].split("/")[1]) for stat in station_dict['stations']]
+        good_ch = np.asarray(self.good_ch, dtype=int)
+
         self.stats = []
         self.statNames = [] # Necessary for streaming traveltime picks
-        for idx in range(len(self.chIds)):
+        self.latitudes = []
+        self.longitudes = []
+        kept_channels_info = []
+        kept_subset_idx = []
+        kept_raw_ch_ids = []
+        skipped_subset_idx = []
+
+        for idx, subset_idx in enumerate(xml_subset_idx):
+            subset_idx = int(subset_idx)
+            if subset_idx < 0 or subset_idx >= len(good_ch):
+                skipped_subset_idx.append(subset_idx)
+                continue
+
             stat = Stats()
             stat.network = network_codes[idx]
             stat.station = station_codes[idx]
             stat.channel = channel_codes[idx]
+            channel_meta = inventory.select(
+                network=network_codes[idx],
+                station=station_codes[idx],
+                channel=channel_codes[idx],
+            )
+            latitude = None
+            longitude = None
+            if len(channel_meta.networks) > 0 and len(channel_meta.networks[0].stations) > 0:
+                station_meta = channel_meta.networks[0].stations[0]
+                if len(station_meta.channels) > 0:
+                    chan = station_meta.channels[0]
+                    latitude = getattr(chan, 'latitude', None)
+                    longitude = getattr(chan, 'longitude', None)
+                if latitude is None:
+                    latitude = getattr(station_meta, 'latitude', None)
+                if longitude is None:
+                    longitude = getattr(station_meta, 'longitude', None)
+            stat.latitude = latitude
+            stat.longitude = longitude
+
             self.stats.append(stat)
-            self.statNames.append("%s.%s.%s.--"%(station_codes[idx],channel_codes[idx],network_codes[idx]))
+            self.latitudes.append(latitude)
+            self.longitudes.append(longitude)
+            self.statNames.append("%s.%s.%s.--" % (station_codes[idx], channel_codes[idx], network_codes[idx]))
+            kept_channels_info.append(xml_channels_info[idx])
+            kept_subset_idx.append(subset_idx)
+            kept_raw_ch_ids.append(int(good_ch[subset_idx]))
+
+        self.channels_info = np.array(kept_channels_info)
+        self.chIds = np.array(kept_subset_idx, dtype=int)
+        self.rawChIds = np.array(kept_raw_ch_ids, dtype=int)
         self.statNames = np.array(self.statNames)
+        self.latitudes = np.array(self.latitudes, dtype=object)
+        self.longitudes = np.array(self.longitudes, dtype=object)
+
+        if skipped_subset_idx:
+            print(
+                f'Skipping {len(skipped_subset_idx)} XML-selected channels with out-of-range reduced-subset indices: {skipped_subset_idx}',
+                flush=True,
+            )
         return
     
     def writeObsPyTraces(self, fs, datapath, scaling=1e6):
@@ -378,3 +441,194 @@ def merge_stream_picks(TT_picksBuf, TT_picksNew, delta_t_thres=2.0, maxBuf=3600.
     TT_picks = TT_picks.drop(columns=['time_diff'])
     
     return TT_picks
+
+
+############################################################################################################
+# PGA2FinDer realtime functions and utilities
+############################################################################################################
+
+
+@dataclass
+class PGAState:
+    conversion_df: pd.DataFrame
+    buffer_channels: np.ndarray
+    channels_info: np.ndarray
+    xml_subset_idx: np.ndarray
+    raw_channel_ids: np.ndarray
+    stat_names: np.ndarray
+    export_row_idx: np.ndarray
+    n_ch_smooth: int
+    conversion_factors: np.ndarray
+    channel_to_factor: dict
+    finder_station_template: dict
+    finder_metadata: dict
+
+
+def init_pga_state(conversion_df, buffer_channels, channels_info, xml_subset_idx, raw_channel_ids, stat_names, export_row_idx, stats, n_ch_smooth):
+    """Initialize PGA conversion metadata for the current ring-buffer channels and XML export subset.
+
+    `xml_subset_idx` and `export_row_idx` are positional indices into the reduced
+    channel subset defined by `buffer_channels`. They are not raw DAS channel ids,
+    and the leading XML label component is not used for indexing.
+    """
+    if channels_info is None or xml_subset_idx is None or raw_channel_ids is None or stat_names is None or export_row_idx is None or stats is None:
+        raise ValueError('PGA processing requires XML-derived export metadata')
+    if conversion_df is None:
+        raise ValueError('PGA processing requires a conversion dataframe')
+
+    buffer_channels = np.asarray(buffer_channels, dtype=int)
+    export_row_idx = np.asarray(export_row_idx, dtype=int)
+    if export_row_idx.size == 0:
+        raise ValueError('No XML-selected channels overlap the input channel list')
+
+    conversion_df = conversion_df.copy()
+    conversion_df['Channel'] = conversion_df['Channel'].astype(int)
+    conversion_df['PGA/PSR-Ratio'] = pd.to_numeric(
+        conversion_df['PGA/PSR-Ratio'], errors='coerce'
+    )
+
+    if conversion_df['PGA/PSR-Ratio'].isna().any():
+        bad_rows = conversion_df[conversion_df['PGA/PSR-Ratio'].isna()]['Channel'].tolist()
+        raise ValueError(
+            'Invalid PGA/PSR-Ratio values for channels: %s'
+            % ', '.join(map(str, bad_rows))
+        )
+
+    channel_to_factor = dict(zip(conversion_df['Channel'], conversion_df['PGA/PSR-Ratio']))
+    missing_buffer_channels = [int(ch) for ch in buffer_channels if int(ch) not in channel_to_factor]
+    if missing_buffer_channels:
+        raise ValueError(
+            'Missing PGA/PSR-Ratio for input channels: %s'
+            % ', '.join(map(str, missing_buffer_channels[:20]))
+        )
+
+    conversion_factors = np.array([channel_to_factor[int(ch)] for ch in buffer_channels], dtype=float)
+    finder_station_template = {}
+    for idx, sncl in enumerate(stat_names):
+        stat = stats[idx]
+        latitude = getattr(stat, 'latitude', None)
+        longitude = getattr(stat, 'longitude', None)
+        finder_station_template[sncl] = {
+            'lat': f"{float(latitude):.6f}" if latitude is not None else None,
+            'lon': f"{float(longitude):.6f}" if longitude is not None else None,
+        }
+
+    return PGAState(
+        conversion_df=conversion_df,
+        buffer_channels=buffer_channels,
+        channels_info=np.array(channels_info),
+        xml_subset_idx=np.array(xml_subset_idx, dtype=int),
+        raw_channel_ids=np.array(raw_channel_ids, dtype=int),
+        stat_names=np.array(stat_names),
+        export_row_idx=export_row_idx,
+        n_ch_smooth=int(n_ch_smooth),
+        conversion_factors=conversion_factors,
+        channel_to_factor=channel_to_factor,
+        finder_station_template=finder_station_template,
+        finder_metadata={'columns': ['lat', 'lon', 'sncl', 'timestamp', 'PGA']},
+    )
+
+
+def compute_peak_strain_rate_window(data, time_stamps):
+    """Compute peak absolute strain rate and the corresponding time per channel."""
+    if data.ndim != 2:
+        raise ValueError('data must be a 2D array with shape [nch, nt]')
+    if len(time_stamps) != data.shape[1]:
+        raise ValueError('time_stamps length must match data.shape[1]')
+
+    peak_indices = np.argmax(np.abs(data), axis=1)
+    peak_strain_rate = np.abs(data[np.arange(data.shape[0]), peak_indices])
+    peak_times = np.asarray(time_stamps)[peak_indices]
+    return peak_strain_rate, peak_indices, peak_times
+
+
+def convert_peak_strain_rate_to_pga(peak_strain_rate, peak_indices, time_stamps, conversion_factors):
+    """Convert peak strain rate values to pseudo-PGA values using channel factors."""
+    peak_strain_rate = np.asarray(peak_strain_rate, dtype=float)
+    peak_indices = np.asarray(peak_indices, dtype=int)
+    conversion_factors = np.asarray(conversion_factors, dtype=float)
+    if peak_strain_rate.shape != conversion_factors.shape:
+        raise ValueError('peak_strain_rate and conversion_factors must have the same shape')
+
+    pga_values = peak_strain_rate * conversion_factors
+    peak_times = np.asarray(time_stamps)[peak_indices]
+    return pga_values, peak_times
+
+
+def smooth_pga_values_median_subset(pga_values, pga_times, export_row_idx, n_ch_smooth):
+    """Apply spatial median smoothing only for the requested export channels."""
+    pga_values = np.asarray(pga_values, dtype=float)
+    pga_times = np.asarray(pga_times)
+    export_row_idx = np.asarray(export_row_idx, dtype=int)
+    if pga_values.ndim != 1:
+        raise ValueError('pga_values must be a 1D array')
+    if len(pga_values) != len(pga_times):
+        raise ValueError('pga_values and pga_times must have the same length')
+    if n_ch_smooth < 0 or n_ch_smooth % 2 != 0:
+        raise ValueError('n_ch_smooth must be a non-negative even integer')
+    if export_row_idx.ndim != 1:
+        raise ValueError('export_row_idx must be a 1D array')
+
+    half_window = n_ch_smooth // 2
+    smoothed_values = np.empty(export_row_idx.shape[0], dtype=float)
+    smoothed_times = np.empty(export_row_idx.shape[0], dtype=object)
+
+    for out_idx, ich in enumerate(export_row_idx):
+        left = max(0, ich - half_window)
+        right = min(len(pga_values), ich + half_window + 1)
+        window_values = pga_values[left:right]
+        window_times = pga_times[left:right]
+        order = np.argsort(window_values, kind='stable')
+        median_idx = order[len(order) // 2]
+        smoothed_values[out_idx] = window_values[median_idx]
+        smoothed_times[out_idx] = window_times[median_idx]
+
+    return smoothed_values, smoothed_times
+
+
+def update_real_time_pga(ringbuff, pga_state):
+    """Compute export-ready PGA rows from the current ring buffer window."""
+    if ringbuff.channels_info is None:
+        raise ValueError('PGA processing requires ring buffer metadata from XML')
+
+    data = ringbuff.getData()
+    time_stamps = ringbuff.getTimeStamps()
+    peak_strain_rate, peak_indices, peak_times = compute_peak_strain_rate_window(data, time_stamps)
+    pga_values_raw, pga_times_raw = convert_peak_strain_rate_to_pga(
+        peak_strain_rate,
+        peak_indices,
+        time_stamps,
+        pga_state.conversion_factors,
+    )
+    pga_values, pga_times = smooth_pga_values_median_subset(
+        pga_values_raw,
+        pga_times_raw,
+        pga_state.export_row_idx,
+        pga_state.n_ch_smooth,
+    )
+
+    rows = []
+    for idx, channel_info in enumerate(pga_state.channels_info):
+        export_idx = int(pga_state.export_row_idx[idx])
+        network_code, station_code, _, channel_code = channel_info.split('.')
+        stats = ringbuff.stats[idx]
+        rows.append({
+            'xml_subset_index': int(pga_state.xml_subset_idx[idx]),
+            'channel_index': int(pga_state.xml_subset_idx[idx]),
+            'csv_row_index': export_idx,
+            'raw_channel_id': int(pga_state.raw_channel_ids[idx]),
+            'channel_info': channel_info,
+            'sncl': pga_state.stat_names[idx],
+            'network': network_code,
+            'station': station_code,
+            'channel': channel_code,
+            'location': '--',
+            'latitude': getattr(stats, 'latitude', None),
+            'longitude': getattr(stats, 'longitude', None),
+            'peak_strain_rate': float(peak_strain_rate[export_idx]),
+            'peak_strain_rate_time': peak_times[export_idx],
+            'pga': float(pga_values[idx]),
+            'pga_time': pga_times[idx],
+        })
+
+    return pd.DataFrame(rows)
