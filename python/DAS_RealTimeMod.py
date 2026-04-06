@@ -130,7 +130,7 @@ class RingBuffer:
             self.stats.append(stat)
             self.latitudes.append(latitude)
             self.longitudes.append(longitude)
-            self.statNames.append("%s.%s.%s.--" % (station_codes[idx], channel_codes[idx], network_codes[idx]))
+            self.statNames.append("%s.%s.%s.--" % (network_codes[idx], station_codes[idx], channel_codes[idx]))
             kept_channels_info.append(xml_channels_info[idx])
             kept_subset_idx.append(subset_idx)
             kept_raw_ch_ids.append(int(good_ch[subset_idx]))
@@ -509,8 +509,8 @@ def init_pga_state(conversion_df, buffer_channels, channels_info, xml_subset_idx
         latitude = getattr(stat, 'latitude', None)
         longitude = getattr(stat, 'longitude', None)
         finder_station_template[sncl] = {
-            'lat': f"{float(latitude):.6f}" if latitude is not None else None,
-            'lon': f"{float(longitude):.6f}" if longitude is not None else None,
+            'lat': f"{float(latitude):.3f}" if latitude is not None else None,
+            'lon': f"{float(longitude):.3f}" if longitude is not None else None,
         }
 
     return PGAState(
@@ -525,7 +525,7 @@ def init_pga_state(conversion_df, buffer_channels, channels_info, xml_subset_idx
         conversion_factors=conversion_factors,
         channel_to_factor=channel_to_factor,
         finder_station_template=finder_station_template,
-        finder_metadata={'columns': ['lat', 'lon', 'sncl', 'timestamp', 'PGA']},
+        finder_metadata={'columns': ['lat', 'lon', 'sncl', 'timestamp', 'HSZ', 'HS1', 'HS2']},
     )
 
 
@@ -550,7 +550,7 @@ def convert_peak_strain_rate_to_pga(peak_strain_rate, peak_indices, time_stamps,
     if peak_strain_rate.shape != conversion_factors.shape:
         raise ValueError('peak_strain_rate and conversion_factors must have the same shape')
 
-    pga_values = peak_strain_rate * conversion_factors
+    pga_values = peak_strain_rate * conversion_factors * 100.0
     peak_times = np.asarray(time_stamps)[peak_indices]
     return pga_values, peak_times
 
@@ -629,6 +629,9 @@ def update_real_time_pga(ringbuff, pga_state):
             'peak_strain_rate_time': peak_times[export_idx],
             'pga': float(pga_values[idx]),
             'pga_time': pga_times[idx],
+            'HSZ': 0.0,
+            'HS1': float(pga_values[idx]),
+            'HS2': 0.0,
         })
 
     return pd.DataFrame(rows)

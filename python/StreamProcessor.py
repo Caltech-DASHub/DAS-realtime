@@ -105,7 +105,9 @@ def build_finder_pga_payload(pga_rows, pga_state):
         stations[row['sncl']] = {
             **static_station,
             'timestamp': station_timestamp,
-            'PGA': f"{float(row['pga']):.6e}",
+            'HSZ': '0.000',
+            'HS1': f"{float(row['pga']):.3f}",
+            'HS2': '0.000',
         }
 
     if missing_geo:
@@ -150,6 +152,11 @@ def write_pga_debug_outputs(pga_rows, finder_message, output_dir, timestamp):
     txt_path = outdir / f'{stamp}_finder.txt'
 
     rows_to_write = pga_rows.copy()
+    for col in ['latitude', 'longitude', 'pga', 'HSZ', 'HS1', 'HS2']:
+        if col in rows_to_write.columns:
+            rows_to_write[col] = pd.to_numeric(rows_to_write[col], errors='coerce').apply(
+                lambda x: f'{x:.3f}' if pd.notna(x) else None
+            )
     if 'peak_strain_rate_time' in rows_to_write.columns:
         rows_to_write['peak_strain_rate_time'] = rows_to_write['peak_strain_rate_time'].apply(
             lambda x: pd.Timestamp(x).isoformat() if pd.notna(x) else None
@@ -185,6 +192,16 @@ def _finder_reconnect_ready():
     return time.monotonic() >= finderReconnectNotBefore
 
 
+def _record_data_delay_sample(strmRdr, packet, delay_sum, delay_count):
+    """Accumulate one packet header-to-local-receive delay sample when available."""
+    if packet == b'':
+        return delay_sum, delay_count
+    delay_seconds = getattr(strmRdr, 'last_packet_delay_seconds', None)
+    if delay_seconds is None or not np.isfinite(delay_seconds):
+        return delay_sum, delay_count
+    return delay_sum + float(delay_seconds), delay_count + 1
+
+
 def doWork(strmRdr, args, waveRing=None, pickRing=None, loop=None, minimumPhaseNetTime=30.0):
     global finderSender, finderReconnectNotBefore
 
@@ -207,9 +224,32 @@ def doWork(strmRdr, args, waveRing=None, pickRing=None, loop=None, minimumPhaseN
         TT_picksBuf = None
         pgaState = None
         pickingChannel_df = None
+        pgaRowsBuf = []
+        finderMessagesBuf = []
+        pgaOutputStart = None
+        dataDelaySum = 0.0
+        dataDelayCount = 0
+
+        strmRdr.enable_data_delay_diag = bool(args.dataDelayDiag)
+
+        def flush_pga_output_buffers():
+            nonlocal pgaRowsBuf, finderMessagesBuf, pgaOutputStart
+            if args.PGAOutput is None or pgaOutputStart is None or len(pgaRowsBuf) == 0 or len(finderMessagesBuf) == 0:
+                return
+            write_pga_debug_outputs(
+                pd.concat(pgaRowsBuf, ignore_index=True),
+                '\n\n'.join(finderMessagesBuf),
+                args.PGAOutput,
+                pgaOutputStart,
+            )
+            pgaRowsBuf = []
+            finderMessagesBuf = []
+            pgaOutputStart = None
 
         ii = 0  # packet counter
         packet = strmRdr.getNextPacket()
+        if args.dataDelayDiag:
+            dataDelaySum, dataDelayCount = _record_data_delay_sample(strmRdr, packet, dataDelaySum, dataDelayCount)
         fs = strmRdr.getFs(packet)
         deltaStrainRate = timedelta(seconds=float(0.5 / fs))
         nch = strmRdr.getNumChannel(packet)
@@ -252,6 +292,8 @@ def doWork(strmRdr, args, waveRing=None, pickRing=None, loop=None, minimumPhaseN
         OldtimeSample = strmRdr.getPayloadRad(packet) * conv_factor
         if strainRate:
             packet = strmRdr.getNextPacket()
+            if args.dataDelayDiag:
+                dataDelaySum, dataDelayCount = _record_data_delay_sample(strmRdr, packet, dataDelaySum, dataDelayCount)
             currtimeSample = strmRdr.getPayloadRad(packet) * conv_factor
             ringbuff.append(currtimeSample - OldtimeSample, timestamps=strmRdr.getPacketTimestamp(packet) - deltaStrainRate)
             OldtimeSample = currtimeSample
@@ -260,6 +302,8 @@ def doWork(strmRdr, args, waveRing=None, pickRing=None, loop=None, minimumPhaseN
         ii += strmRdr.getNumTimeSamples(packet)
         while True:
             packet = strmRdr.getNextPacket()
+            if args.dataDelayDiag:
+                dataDelaySum, dataDelayCount = _record_data_delay_sample(strmRdr, packet, dataDelaySum, dataDelayCount)
             if packet == b'':
                 break
 
@@ -280,6 +324,7 @@ def doWork(strmRdr, args, waveRing=None, pickRing=None, loop=None, minimumPhaseN
                 if filelength > 0.0 and filepath is not None:
                     print('Writing file at %s' % ringbuff.getTimeStamps()[-1].strftime(time_format), flush=True)
                     ringbuff.writeObsPyTraces(fs, filepath)
+                flush_pga_output_buffers()
                 time.sleep(0.1)
                 return
 
@@ -303,6 +348,15 @@ def doWork(strmRdr, args, waveRing=None, pickRing=None, loop=None, minimumPhaseN
 
             # Do some processing every workInterval
             if workInterval > 0.0 and ii % int(workInterval * fs) == 0 and ii > 0:
+                if args.dataDelayDiag and dataDelayCount > 0:
+                    print(
+                        f'Current average data delay: {dataDelaySum / dataDelayCount:.3f} s '
+                        f'({dataDelayCount} packets)',
+                        flush=True,
+                    )
+                    dataDelaySum = 0.0
+                    dataDelayCount = 0
+
                 if args.PGA2FinDer and pgaState is not None:
                     pga_rows = update_real_time_pga(ringbuff, pgaState)
                     payload, metadata, message_timestamp = build_finder_pga_payload(pga_rows, pgaState)
@@ -343,7 +397,14 @@ def doWork(strmRdr, args, waveRing=None, pickRing=None, loop=None, minimumPhaseN
                             _schedule_finder_reconnect_cooldown()
 
                     if args.PGAOutput is not None and finder_message is not None:
-                        write_pga_debug_outputs(pga_rows, finder_message, args.PGAOutput, message_timestamp)
+                        if filelength > 0.0 and pgaOutputStart is not None and (message_timestamp - pgaOutputStart) >= filelength:
+                            flush_pga_output_buffers()
+                        if pgaOutputStart is None:
+                            pgaOutputStart = message_timestamp
+                        pgaRowsBuf.append(pga_rows.copy())
+                        finderMessagesBuf.append(finder_message)
+                        if filelength <= 0.0:
+                            flush_pga_output_buffers()
 
                 # Picking has been requested if loop is not None
                 if loop is not None:
@@ -383,8 +444,14 @@ def doWork(strmRdr, args, waveRing=None, pickRing=None, loop=None, minimumPhaseN
             if waveRing is not None and ii % int(ringbuff_size * fs) == 0:
                 ringbuff.send2ew(fs, waveRing)
 
+        flush_pga_output_buffers()
+
     except Exception as e:
         print(e)
+        try:
+            flush_pga_output_buffers()
+        except Exception:
+            pass
         pass
 
 
@@ -496,6 +563,7 @@ if __name__ == '__main__':
     parser.add_argument('--finderConfig', '-fdCfg', metavar='finderConfig', type=str, default=None, help='Path to the STOMP/FinDer config file')
     parser.add_argument('--nChPGASmooth', '-pgaNchSm', metavar='nChPGASmooth', type=int, default=0, help='Number of neighbor channels used for PGA smoothing, split evenly left/right around the center channel. Must be even. Default 0')
     parser.add_argument('--PGAOutput', '-pgaOut', metavar='PGAOutput', type=str, default=None, help='Optional output directory for PGA debug CSV and FinDer message text files')
+    parser.add_argument('--dataDelayDiag', '-dlyDiag', metavar='dataDelayDiag', type=int, default=0, help='Optional flag to print the average packet header-to-local receive delay once per workInterval. Default 0')
     parser.add_argument('--debug', '-dbg', metavar='debug', type=int, default=0, help='Debug flag for asyncio module')
     args = parser.parse_args()
     main()
