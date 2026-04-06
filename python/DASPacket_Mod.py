@@ -283,7 +283,7 @@ class OptaSenseStreamReader(StreamReader):
     def getConversionFactor(self, packet):
         GaugeL = self.getGaugeLengthProc(packet)
         nFiber = 1.4682
-        lamdLaser = 1550.0
+        lamdLaser = 1550.0 * 1e-9
         eta = 0.78
         factor = 4.0 * np.pi * eta * nFiber * GaugeL / lamdLaser
         radconv = 1.0
