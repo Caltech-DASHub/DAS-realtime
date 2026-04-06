@@ -44,15 +44,22 @@ python3 ~/projects/realtime/DAS-realtime/python/StreamProcessor.py \
   -strTp OptaSense \
   -wrkint 1.0 \
   --ringbuffer 1.0 \
-  --filelength 60.0 \
+  --filelength 600.0 \
   -strnRt 1 \
   --xmlmeta ~/projects/realtime/data/input_gitlab/DAS_RidgecrestSouth100km.xml \
   -pch ~/projects/realtime/data/input_gitlab/DAS_RidgecrestSouth100km5000ChPicking_with_PGA2PSRRatio.csv \
   --PGA2FinDer 1 \
-  --finderConfig ~/projects/realtime/DAS-realtime/external/stomp_client/stomp_client.cfg \
+  --finderConfig ~/projects/realtime/data/input_gitlab/finder_sender.cfg \
   --nChPGASmooth 250 \
-  --PGAOutput ~/projects/realtime/experiments/output \
-  --dataDelayDiag 1
+  --PGAOutput ~/projects/realtime/experiments/output_PGA2FinDer \
+  --dataDelayDiag 1 \
+  --debug 0
+```
+
+Check FinDer logs for the inbound PGA messages:
+
+```bash
+tail -F /app/finder/run/logs/finder_current.log | grep -v finder@glass | grep -e TimeStamp -e Unexpected -e Handler -e xenolith  -e SOH -e initialized -e '<event_message' -e '<mag unit' -e qzhai
 ```
 
 Notes for this example:
