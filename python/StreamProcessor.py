@@ -338,13 +338,21 @@ def doWork(strmRdr, args, waveRing=None, pickRing=None, loop=None, minimumPhaseN
 
             ii += strmRdr.getNumTimeSamples(packet)
 
-            t_each_print = 1.0  # seconds
-            if ii % int(t_each_print * fs) == 0:
-                print(
-                    f'Packet first and last timestamp and shape of ringbuffer: {ringbuff.getTimeStamps()[0]}, '
-                    f'{ringbuff.getTimeStamps()[-1]}, {ringbuff.getData().shape}',
-                    flush=True,
-                )
+            # Print some info about the data stream every t_each_print seconds for monitoring purposes
+            if False:
+                t_each_print = 1.0  # seconds
+                if ii % int(t_each_print * fs) == 0:
+                    print(
+                        f'Packet first and last timestamp and shape of ringbuffer: {ringbuff.getTimeStamps()[0]}, '
+                        f'{ringbuff.getTimeStamps()[-1]}, {ringbuff.getData().shape}',
+                        flush=True,
+                    )
+                    # Compute and print the median of the absolute strain rate values in the ring buffer for debugging and monitoring purposes
+                    raw_strainrate_abs_median = np.median(np.abs(ringbuff.getData()))
+                    print(
+                        f'RAW_STRAINRATE_ABS_MEDIAN: {raw_strainrate_abs_median}',
+                        flush=True,
+                    )
 
             # Do some processing every workInterval
             if workInterval > 0.0 and ii % int(workInterval * fs) == 0 and ii > 0:
@@ -358,6 +366,7 @@ def doWork(strmRdr, args, waveRing=None, pickRing=None, loop=None, minimumPhaseN
                     dataDelayCount = 0
 
                 if args.PGA2FinDer and pgaState is not None:
+
                     pga_rows = update_real_time_pga(ringbuff, pgaState)
                     payload, metadata, message_timestamp = build_finder_pga_payload(pga_rows, pgaState)
 
