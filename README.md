@@ -44,7 +44,7 @@ python3 ~/projects/realtime/DAS-realtime/python/StreamProcessor.py \
   -strTp OptaSense \
   -wrkint 1.0 \
   --ringbuffer 1.0 \
-  --filelength 10.0 \
+  --filelength 60.0 \
   -strnRt 1 \
   --xmlmeta ~/projects/realtime/data/input_gitlab/DAS_RidgecrestSouth100km.xml \
   -pch ~/projects/realtime/data/input_gitlab/DAS_RidgecrestSouth100km5000ChPicking_with_PGA2PSRRatio.csv \
