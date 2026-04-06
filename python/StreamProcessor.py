@@ -165,7 +165,7 @@ def write_pga_debug_outputs(pga_rows, finder_message, output_dir, timestamp):
         rows_to_write['pga_time'] = rows_to_write['pga_time'].apply(
             lambda x: pd.Timestamp(x).isoformat() if pd.notna(x) else None
         )
-    rows_to_write.to_csv(csv_path, index=False)
+    # rows_to_write.to_csv(csv_path, index=False)
     txt_path.write_text(finder_message)
 
 
