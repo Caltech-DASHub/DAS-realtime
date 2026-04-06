@@ -69,9 +69,16 @@ def init_finder_sender(config_path, verbose_level=1):
     from finder_sender import FinderMessageSender
     from stomp_client import StompConfig, StompConnection, LoggingListener
 
+    class SilentLoggingListener(LoggingListener):
+        """Keep STOMP listener callbacks active without printing message bodies."""
+
+        def on_message(self, frame) -> None:
+            self.received += 1
+
     cfg = StompConfig(config_path)
     conn = StompConnection(cfg)
-    listener = LoggingListener(conn, verbose_level=verbose_level)
+    listener_cls = LoggingListener if verbose_level > 0 else SilentLoggingListener
+    listener = listener_cls(conn, verbose_level=verbose_level)
     conn.set_listener(listener)
     sender = FinderMessageSender(conn, verbose_level=verbose_level)
     sender.connect()
@@ -339,7 +346,7 @@ def doWork(strmRdr, args, waveRing=None, pickRing=None, loop=None, minimumPhaseN
             ii += strmRdr.getNumTimeSamples(packet)
 
             # Print some info about the data stream every t_each_print seconds for monitoring purposes
-            if False:
+            if args.debug > 0:
                 t_each_print = 1.0  # seconds
                 if ii % int(t_each_print * fs) == 0:
                     print(
@@ -358,7 +365,7 @@ def doWork(strmRdr, args, waveRing=None, pickRing=None, loop=None, minimumPhaseN
             if workInterval > 0.0 and ii % int(workInterval * fs) == 0 and ii > 0:
                 if args.dataDelayDiag and dataDelayCount > 0:
                     print(
-                        f'Current average data delay: {dataDelaySum / dataDelayCount:.3f} s '
+                        f'{datetime.now(timezone.utc).isoformat(timespec="microseconds")} Current average data delay : {dataDelaySum / dataDelayCount:.3f} s '
                         f'({dataDelayCount} packets)',
                         flush=True,
                     )
