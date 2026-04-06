@@ -149,7 +149,7 @@ class RingBuffer:
             )
         return
     
-    def writeObsPyTraces(self, fs, datapath, scaling=1e6):
+    def writeObsPyTraces(self, fs, datapath, scaling=1e15):
         """Method to write Obspy traces"""
         if self.channels_info is None:
             raise ValueError("Call method setObspyTraceHeader to set trace info before using writeObsPyTraces")
@@ -168,7 +168,7 @@ class RingBuffer:
             os.chmod(file_path, 0o644)
         return
     
-    def send2ew(self, fs, waveMod, ringID=0, scaling=1e6):
+    def send2ew(self, fs, waveMod, ringID=0, scaling=1e15):
         """Function to send buffered data to Earthworm wavering"""
         if scaling > 1.0:
             traceData = (self.getData()[self.chIds,:]*scaling).astype(np.int32)
@@ -224,7 +224,7 @@ class RingBuffer:
                 """ Return array of timestamps in correct order """
                 return np.array(self.timeStamps[self.cur:]+self.timeStamps[:self.cur])
             
-            def writeObsPyTraces(self, fs, datapath, scaling=1e6):
+            def writeObsPyTraces(self, fs, datapath, scaling=1e15):
                 """Method to write Obspy traces"""
                 if self.channels_info is None:
                     raise ValueError("Call method setObspyTraceHeader to set trace info before using writeObsPyTraces")
@@ -243,7 +243,7 @@ class RingBuffer:
                     os.chmod(file_path, 0o644)
                 return
             
-            def send2ew(self, fs, waveMod, ringID=0, scaling=1e6):
+            def send2ew(self, fs, waveMod, ringID=0, scaling=1e15):
                 """
                     Sends buffered seismic data to Earthworm wavering.
 
